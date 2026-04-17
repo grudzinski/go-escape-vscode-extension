@@ -1,0 +1,59 @@
+{
+  "name": "go-escape-vscode-extension",
+  "displayName": "Go Heap Escape Highlighter",
+  "description": "Highlights lines where Go variables escape to the heap",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "icon": "logo.png",
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:go"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "goEscape.analyze",
+        "title": "Go: Analyze Heap Escapes"
+      }
+    ],
+    "configuration": {
+      "title": "Go Heap Escape Highlighter",
+      "properties": {
+        "goEscape.enableEscapeHighlight": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight lines where variables escape to the heap"
+        },
+        "goEscape.enableInlineHighlight": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight lines with inlining calls"
+        },
+        "goEscape.escapeColor": {
+          "type": "string",
+          "default": "rgba(255, 160, 0, 0.07)",
+          "description": "Background color for heap escape lines"
+        },
+        "goEscape.inlineColor": {
+          "type": "string",
+          "default": "rgba(100, 180, 255, 0.07)",
+          "description": "Background color for inlining call lines"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
+}
