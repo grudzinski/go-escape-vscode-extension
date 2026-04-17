@@ -5,20 +5,27 @@ import * as path from 'path';
 // file path -> line -> message
 const escapeMap = new Map<string, Map<number, string>>();
 const inlineMap = new Map<string, Map<number, string>>();
+const devirtMap = new Map<string, Map<number, string>>();
 
 let escapeDecoration: vscode.TextEditorDecorationType;
 let inlineDecoration: vscode.TextEditorDecorationType;
+let devirtDecoration: vscode.TextEditorDecorationType;
 
 function createDecorations() {
     const cfg = vscode.workspace.getConfiguration('goEscape');
     escapeDecoration?.dispose();
     inlineDecoration?.dispose();
+    devirtDecoration?.dispose();
     escapeDecoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: cfg.get<string>('escapeColor', 'rgba(255, 160, 0, 0.07)'),
         isWholeLine: true,
     });
     inlineDecoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: cfg.get<string>('inlineColor', 'rgba(100, 180, 255, 0.07)'),
+        isWholeLine: true,
+    });
+    devirtDecoration = vscode.window.createTextEditorDecorationType({
+        backgroundColor: cfg.get<string>('devirtColor', 'rgba(100, 220, 120, 0.07)'),
         isWholeLine: true,
     });
 }
@@ -32,9 +39,7 @@ function runAnalysis(fileDir: string, workspaceRoot: string): Promise<void> {
             while ((m = reEscape.exec(stderr)) !== null) {
                 const absPath = path.resolve(workspaceRoot, m[1]);
                 const lineNum = parseInt(m[2]) - 1; // 0-based
-                if (!escapeMap.has(absPath)) {
-                    escapeMap.set(absPath, new Map());
-                }
+                if (!escapeMap.has(absPath)) { escapeMap.set(absPath, new Map()); }
                 escapeMap.get(absPath)!.set(lineNum, m[3]);
             }
 
@@ -42,11 +47,18 @@ function runAnalysis(fileDir: string, workspaceRoot: string): Promise<void> {
             const reInline = /^(.+?):(\d+):\d+: (inlining call to .+)/gm;
             while ((m = reInline.exec(stderr)) !== null) {
                 const absPath = path.resolve(workspaceRoot, m[1]);
-                const lineNum = parseInt(m[2]) - 1; // 0-based
-                if (!inlineMap.has(absPath)) {
-                    inlineMap.set(absPath, new Map());
-                }
+                const lineNum = parseInt(m[2]) - 1;
+                if (!inlineMap.has(absPath)) { inlineMap.set(absPath, new Map()); }
                 inlineMap.get(absPath)!.set(lineNum, m[3]);
+            }
+
+            // Format: ./path/file.go:LINE:COL: devirtualizing x.Method to *ConcreteType
+            const reDevirt = /^(.+?):(\d+):\d+: (devirtualizing .+)/gm;
+            while ((m = reDevirt.exec(stderr)) !== null) {
+                const absPath = path.resolve(workspaceRoot, m[1]);
+                const lineNum = parseInt(m[2]) - 1;
+                if (!devirtMap.has(absPath)) { devirtMap.set(absPath, new Map()); }
+                devirtMap.get(absPath)!.set(lineNum, m[3]);
             }
 
             resolve();
@@ -77,6 +89,16 @@ function applyDecorations(editor: vscode.TextEditor) {
         }
     }
     editor.setDecorations(inlineDecoration, inlineDecos);
+
+    const devirtLineMap = devirtMap.get(filePath);
+    const devirtDecos: vscode.DecorationOptions[] = [];
+    if (cfg.get<boolean>('enableDevirtHighlight', true) && devirtLineMap) {
+        for (const [lineNum, msg] of devirtLineMap) {
+            if (lineNum >= editor.document.lineCount) continue;
+            devirtDecos.push({ range: editor.document.lineAt(lineNum).range, hoverMessage: msg });
+        }
+    }
+    editor.setDecorations(devirtDecoration, devirtDecos);
 }
 
 async function analyze(document: vscode.TextDocument) {
@@ -90,6 +112,7 @@ async function analyze(document: vscode.TextDocument) {
 
     escapeMap.clear();
     inlineMap.clear();
+    devirtMap.clear();
 
     await runAnalysis(fileDir, workspaceRoot);
 
@@ -106,7 +129,8 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration('goEscape.escapeColor') || e.affectsConfiguration('goEscape.inlineColor') ||
-            e.affectsConfiguration('goEscape.enableEscapeHighlight') || e.affectsConfiguration('goEscape.enableInlineHighlight')) {
+                e.affectsConfiguration('goEscape.devirtColor') || e.affectsConfiguration('goEscape.enableEscapeHighlight') ||
+                e.affectsConfiguration('goEscape.enableInlineHighlight') || e.affectsConfiguration('goEscape.enableDevirtHighlight')) {
                 createDecorations();
                 for (const editor of vscode.window.visibleTextEditors) {
                     if (editor.document.languageId === 'go') {
@@ -142,4 +166,5 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
     escapeDecoration?.dispose();
     inlineDecoration?.dispose();
+    devirtDecoration?.dispose();
 }

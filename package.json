@@ -34,6 +34,16 @@
           "default": true,
           "description": "Highlight lines with inlining calls"
         },
+        "goEscape.enableDevirtHighlight": {
+          "type": "boolean",
+          "default": true,
+          "description": "Highlight lines where interface calls are devirtualized"
+        },
+        "goEscape.devirtColor": {
+          "type": "string",
+          "default": "rgba(100, 220, 120, 0.07)",
+          "description": "Background color for devirtualized call lines"
+        },
         "goEscape.escapeColor": {
           "type": "string",
           "default": "rgba(255, 160, 0, 0.07)",
