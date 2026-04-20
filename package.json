@@ -1,18 +1,32 @@
 {
   "name": "go-escape-vscode-extension",
+  "publisher": "RomanGrudzinski",
   "displayName": "Go Heap Escape Highlighter",
-  "description": "Highlights lines where Go variables escape to the heap",
-  "version": "0.0.1",
+  "description": "Highlights heap escapes, inlining calls, and devirtualizations from go build -gcflags=-m",
+  "version": "1.0.0",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"
   },
   "icon": "logo.png",
   "categories": [
-    "Other"
+    "Programming Languages"
+  ],
+  "keywords": [
+    "go",
+    "golang",
+    "heap",
+    "escape analysis",
+    "inlining",
+    "performance"
   ],
   "activationEvents": [
     "onLanguage:go"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/grudzinski/go-escape-vscode-extension.git"
+  },
   "main": "./out/extension.js",
   "contributes": {
     "commands": [

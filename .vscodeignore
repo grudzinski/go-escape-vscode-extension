@@ -1,0 +1,10 @@
+.gitignore
+.vscodeignore
+.claude/
+.vscode/
+src/
+tsconfig.json
+node_modules/
+*.vsix
+logo_original.png
+package-lock.json
