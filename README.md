@@ -1,3 +1,5 @@
+<img src="logo.png" width="128" align="right">
+
 # Go Escape Highlighter
 
 Highlights lines reported by `go build -gcflags=-m`:
