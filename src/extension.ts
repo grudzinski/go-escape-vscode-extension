@@ -36,6 +36,8 @@ const kinds: Kind[] = [
     },
 ];
 
+let autoDisposables: vscode.Disposable[] = [];
+
 function createDecorations() {
     const cfg = vscode.workspace.getConfiguration();
     for (const k of kinds) {
@@ -97,12 +99,24 @@ function buildDecorationOptions(editor: vscode.TextEditor, lineMap: Map<number, 
     return options;
 }
 
+function isAutoAnalyzeEnabled(): boolean {
+    return vscode.workspace.getConfiguration().get<boolean>('goEscape.autoAnalyze', true);
+}
+
 function onConfigChanged(e: vscode.ConfigurationChangeEvent) {
-    const configChanged = kinds.some(k =>
+    if (e.affectsConfiguration('goEscape.autoAnalyze')) {
+        const enabled = isAutoAnalyzeEnabled();
+        if (enabled) {
+            enableAutoAnalyze();
+        } else {
+            disableAutoAnalyze();
+        }
+    }
+    const decorationChanged = kinds.some(k =>
         e.affectsConfiguration(k.colorKey) ||
         e.affectsConfiguration(k.enableKey)
     );
-    if (!configChanged) {
+    if (!decorationChanged) {
         return;
     }
     createDecorations();
@@ -117,13 +131,18 @@ function onActiveEditorChanged(editor: vscode.TextEditor | undefined) {
     if (!editor) {
         return;
     }
-    const filePath = editor.document.uri.fsPath;
-    const hasData = kinds.some(k => k.map.has(filePath));
-    if (hasData) {
-        applyDecorations(editor);
+    applyDecorations(editor);
+}
+
+function onActiveEditorChangedAutoAnalyze(editor: vscode.TextEditor | undefined) {
+    if (!editor) {
         return;
     }
-    analyze(editor.document);
+    const filePath = editor.document.uri.fsPath;
+    const hasData = kinds.some(k => k.map.has(filePath));
+    if (!hasData) {
+        analyze(editor.document);
+    }
 }
 
 function onDocumentChanged(e: vscode.TextDocumentChangeEvent) {
@@ -177,22 +196,40 @@ async function analyze(document: vscode.TextDocument) {
     }
 }
 
+function enableAutoAnalyze() {
+    autoDisposables = [
+        vscode.workspace.onDidSaveTextDocument(analyze),
+        vscode.workspace.onDidChangeTextDocument(onDocumentChanged),
+        vscode.window.onDidChangeActiveTextEditor(onActiveEditorChangedAutoAnalyze),
+    ];
+}
+
+function disableAutoAnalyze() {
+    for (const d of autoDisposables) {
+        d.dispose();
+    }
+    autoDisposables = [];
+}
+
 export function activate(context: vscode.ExtensionContext) {
     createDecorations();
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(onConfigChanged),
-        vscode.workspace.onDidSaveTextDocument(analyze),
-        vscode.workspace.onDidChangeTextDocument(onDocumentChanged),
         vscode.window.onDidChangeActiveTextEditor(onActiveEditorChanged),
         vscode.commands.registerCommand('goEscape.analyze', onAnalyzeCommand),
     );
+    const autoAnalyze = isAutoAnalyzeEnabled();
+    if (autoAnalyze) {
+        enableAutoAnalyze();
+    }
     const goDoc = vscode.workspace.textDocuments.find(d => d.languageId === 'go');
-    if (goDoc) {
+    if (goDoc && autoAnalyze) {
         analyze(goDoc);
     }
 }
 
 export function deactivate() {
+    disableAutoAnalyze();
     for (const k of kinds) {
         k.decoration?.dispose();
     }

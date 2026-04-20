@@ -24,6 +24,11 @@
     "configuration": {
       "title": "Go Heap Escape Highlighter",
       "properties": {
+        "goEscape.autoAnalyze": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically run analysis on file save and editor switch. Disable to run only via command."
+        },
         "goEscape.enableEscapeHighlight": {
           "type": "boolean",
           "default": true,
