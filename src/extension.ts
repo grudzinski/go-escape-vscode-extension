@@ -1,121 +1,175 @@
 import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as path from 'path';
+import * as readline from 'readline';
 
-// file path -> line -> message
-const escapeMap = new Map<string, Map<number, string>>();
-const inlineMap = new Map<string, Map<number, string>>();
-const devirtMap = new Map<string, Map<number, string>>();
+interface Kind {
+    re: RegExp;
+    map: Map<string, Map<number, string>>; // file path -> line -> message
+    colorKey: string;
+    enableKey: string;
+    defaultColor: string;
+    decoration?: vscode.TextEditorDecorationType;
+}
 
-let escapeDecoration: vscode.TextEditorDecorationType;
-let inlineDecoration: vscode.TextEditorDecorationType;
-let devirtDecoration: vscode.TextEditorDecorationType;
+const kinds: Kind[] = [
+    {
+        re: /^(.+?):(\d+):\d+: (.+ escapes to heap)/,
+        map: new Map(),
+        colorKey: 'goEscape.escapeColor',
+        enableKey: 'goEscape.enableEscapeHighlight',
+        defaultColor: 'rgba(255, 160, 0, 0.04)',
+    },
+    {
+        re: /^(.+?):(\d+):\d+: (inlining call to .+)/,
+        map: new Map(),
+        colorKey: 'goEscape.inlineColor',
+        enableKey: 'goEscape.enableInlineHighlight',
+        defaultColor: 'rgba(100, 180, 255, 0.04)',
+    },
+    {
+        re: /^(.+?):(\d+):\d+: (devirtualizing .+)/,
+        map: new Map(),
+        colorKey: 'goEscape.devirtColor',
+        enableKey: 'goEscape.enableDevirtHighlight',
+        defaultColor: 'rgba(100, 220, 120, 0.04)',
+    },
+];
 
 function createDecorations() {
-    const cfg = vscode.workspace.getConfiguration('goEscape');
-    escapeDecoration?.dispose();
-    inlineDecoration?.dispose();
-    devirtDecoration?.dispose();
-    escapeDecoration = vscode.window.createTextEditorDecorationType({
-        backgroundColor: cfg.get<string>('escapeColor', 'rgba(255, 160, 0, 0.07)'),
-        isWholeLine: true,
-    });
-    inlineDecoration = vscode.window.createTextEditorDecorationType({
-        backgroundColor: cfg.get<string>('inlineColor', 'rgba(100, 180, 255, 0.07)'),
-        isWholeLine: true,
-    });
-    devirtDecoration = vscode.window.createTextEditorDecorationType({
-        backgroundColor: cfg.get<string>('devirtColor', 'rgba(100, 220, 120, 0.07)'),
-        isWholeLine: true,
+    const cfg = vscode.workspace.getConfiguration();
+    for (const k of kinds) {
+        k.decoration?.dispose();
+        k.decoration = vscode.window.createTextEditorDecorationType({
+            backgroundColor: cfg.get<string>(k.colorKey, k.defaultColor),
+            isWholeLine: true,
+        });
+    }
+}
+
+function runAnalysis(workspaceRoot: string): Promise<void> {
+    return new Promise((resolve) => {
+        const proc = cp.spawn('go', ['build', '-gcflags=-m', '-o', '/dev/null', './...'], { cwd: workspaceRoot });
+        const rl = readline.createInterface({ input: proc.stderr });
+        let lastRel = '';
+        let lastAbs = '';
+        rl.on('line', (line: string) => {
+            for (const k of kinds) {
+                const m = k.re.exec(line);
+                if (!m) {
+                    continue;
+                }
+                if (m[1] !== lastRel) {
+                    lastRel = m[1];
+                    lastAbs = path.resolve(workspaceRoot, m[1]);
+                }
+                const lineNum = parseInt(m[2]) - 1; // 0-based
+                let fileMap = k.map.get(lastAbs);
+                if (!fileMap) {
+                    fileMap = new Map();
+                    k.map.set(lastAbs, fileMap);
+                }
+                fileMap.set(lineNum, m[3]);
+                return;
+            }
+        });
+        proc.on('error', (err: Error) => {
+            vscode.window.showErrorMessage(`go-escape: ${err.message}`);
+            resolve();
+        });
+        proc.on('close', () => resolve());
     });
 }
 
-function runAnalysis(fileDir: string, workspaceRoot: string): Promise<void> {
-    return new Promise((resolve) => {
-        cp.exec('go build -gcflags="-m" -o /dev/null ./...', { cwd: workspaceRoot }, (_err: Error | null, _stdout: string, stderr: string) => {
-            // Format: ./path/file.go:LINE:COL: VAR escapes to heap
-            const reEscape = /^(.+?):(\d+):\d+: (.+ escapes to heap)/gm;
-            let m: RegExpExecArray | null;
-            while ((m = reEscape.exec(stderr)) !== null) {
-                const absPath = path.resolve(workspaceRoot, m[1]);
-                const lineNum = parseInt(m[2]) - 1; // 0-based
-                if (!escapeMap.has(absPath)) { escapeMap.set(absPath, new Map()); }
-                escapeMap.get(absPath)!.set(lineNum, m[3]);
-            }
-
-            // Format: ./path/file.go:LINE:COL: inlining call to Func
-            const reInline = /^(.+?):(\d+):\d+: (inlining call to .+)/gm;
-            while ((m = reInline.exec(stderr)) !== null) {
-                const absPath = path.resolve(workspaceRoot, m[1]);
-                const lineNum = parseInt(m[2]) - 1;
-                if (!inlineMap.has(absPath)) { inlineMap.set(absPath, new Map()); }
-                inlineMap.get(absPath)!.set(lineNum, m[3]);
-            }
-
-            // Format: ./path/file.go:LINE:COL: devirtualizing x.Method to *ConcreteType
-            const reDevirt = /^(.+?):(\d+):\d+: (devirtualizing .+)/gm;
-            while ((m = reDevirt.exec(stderr)) !== null) {
-                const absPath = path.resolve(workspaceRoot, m[1]);
-                const lineNum = parseInt(m[2]) - 1;
-                if (!devirtMap.has(absPath)) { devirtMap.set(absPath, new Map()); }
-                devirtMap.get(absPath)!.set(lineNum, m[3]);
-            }
-
-            resolve();
+function buildDecorationOptions(editor: vscode.TextEditor, lineMap: Map<number, string>): vscode.DecorationOptions[] {
+    const doc = editor.document;
+    const options: vscode.DecorationOptions[] = [];
+    for (const [lineNum, msg] of lineMap) {
+        if (lineNum >= doc.lineCount) {
+            continue;
+        }
+        const line = doc.lineAt(lineNum);
+        options.push({
+            range: line.range,
+            hoverMessage: msg,
         });
-    });
+    }
+    return options;
+}
+
+function onConfigChanged(e: vscode.ConfigurationChangeEvent) {
+    const configChanged = kinds.some(k =>
+        e.affectsConfiguration(k.colorKey) ||
+        e.affectsConfiguration(k.enableKey)
+    );
+    if (!configChanged) {
+        return;
+    }
+    createDecorations();
+    for (const editor of vscode.window.visibleTextEditors) {
+        if (editor.document.languageId === 'go') {
+            applyDecorations(editor);
+        }
+    }
+}
+
+function onActiveEditorChanged(editor: vscode.TextEditor | undefined) {
+    if (!editor) {
+        return;
+    }
+    const filePath = editor.document.uri.fsPath;
+    const hasData = kinds.some(k => k.map.has(filePath));
+    if (hasData) {
+        applyDecorations(editor);
+        return;
+    }
+    analyze(editor.document);
+}
+
+function onDocumentChanged(e: vscode.TextDocumentChangeEvent) {
+    if (!e.document.isDirty) {
+        analyze(e.document);
+    }
+}
+
+function onAnalyzeCommand() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        return;
+    }
+    analyze(editor.document);
 }
 
 function applyDecorations(editor: vscode.TextEditor) {
     const filePath = editor.document.uri.fsPath;
-    const cfg = vscode.workspace.getConfiguration('goEscape');
-
-    const escapeLineMap = escapeMap.get(filePath);
-    const escapeDecos: vscode.DecorationOptions[] = [];
-    if (cfg.get<boolean>('enableEscapeHighlight', true) && escapeLineMap) {
-        for (const [lineNum, msg] of escapeLineMap) {
-            if (lineNum >= editor.document.lineCount) continue;
-            escapeDecos.push({ range: editor.document.lineAt(lineNum).range, hoverMessage: msg });
+    const cfg = vscode.workspace.getConfiguration();
+    for (const k of kinds) {
+        if (!cfg.get<boolean>(k.enableKey, true)) {
+            continue;
         }
-    }
-    editor.setDecorations(escapeDecoration, escapeDecos);
-
-    const inlineLineMap = inlineMap.get(filePath);
-    const inlineDecos: vscode.DecorationOptions[] = [];
-    if (cfg.get<boolean>('enableInlineHighlight', true) && inlineLineMap) {
-        for (const [lineNum, msg] of inlineLineMap) {
-            if (lineNum >= editor.document.lineCount) continue;
-            inlineDecos.push({ range: editor.document.lineAt(lineNum).range, hoverMessage: msg });
+        const lineMap = k.map.get(filePath);
+        if (!lineMap) {
+            continue;
         }
+        const options = buildDecorationOptions(editor, lineMap);
+        editor.setDecorations(k.decoration!, options);
     }
-    editor.setDecorations(inlineDecoration, inlineDecos);
-
-    const devirtLineMap = devirtMap.get(filePath);
-    const devirtDecos: vscode.DecorationOptions[] = [];
-    if (cfg.get<boolean>('enableDevirtHighlight', true) && devirtLineMap) {
-        for (const [lineNum, msg] of devirtLineMap) {
-            if (lineNum >= editor.document.lineCount) continue;
-            devirtDecos.push({ range: editor.document.lineAt(lineNum).range, hoverMessage: msg });
-        }
-    }
-    editor.setDecorations(devirtDecoration, devirtDecos);
 }
 
 async function analyze(document: vscode.TextDocument) {
-    if (document.languageId !== 'go') return;
-
+    const isGo = document.languageId === 'go';
+    const isGoMod = document.fileName.endsWith('go.mod');
+    if (!isGo && !isGoMod) {
+        return;
+    }
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
-    if (!workspaceFolder) return;
-
-    const workspaceRoot = workspaceFolder.uri.fsPath;
-    const fileDir = path.dirname(document.uri.fsPath);
-
-    escapeMap.clear();
-    inlineMap.clear();
-    devirtMap.clear();
-
-    await runAnalysis(fileDir, workspaceRoot);
-
+    if (!workspaceFolder) {
+        return;
+    }
+    for (const k of kinds) {
+        k.map.clear();
+    }
+    await runAnalysis(workspaceFolder.uri.fsPath);
     for (const editor of vscode.window.visibleTextEditors) {
         if (editor.document.languageId === 'go') {
             applyDecorations(editor);
@@ -125,46 +179,21 @@ async function analyze(document: vscode.TextDocument) {
 
 export function activate(context: vscode.ExtensionContext) {
     createDecorations();
-
     context.subscriptions.push(
-        vscode.workspace.onDidChangeConfiguration((e) => {
-            if (e.affectsConfiguration('goEscape.escapeColor') || e.affectsConfiguration('goEscape.inlineColor') ||
-                e.affectsConfiguration('goEscape.devirtColor') || e.affectsConfiguration('goEscape.enableEscapeHighlight') ||
-                e.affectsConfiguration('goEscape.enableInlineHighlight') || e.affectsConfiguration('goEscape.enableDevirtHighlight')) {
-                createDecorations();
-                for (const editor of vscode.window.visibleTextEditors) {
-                    if (editor.document.languageId === 'go') {
-                        applyDecorations(editor);
-                    }
-                }
-            }
-        })
+        vscode.workspace.onDidChangeConfiguration(onConfigChanged),
+        vscode.workspace.onDidSaveTextDocument(analyze),
+        vscode.workspace.onDidChangeTextDocument(onDocumentChanged),
+        vscode.window.onDidChangeActiveTextEditor(onActiveEditorChanged),
+        vscode.commands.registerCommand('goEscape.analyze', onAnalyzeCommand),
     );
-
-    context.subscriptions.push(
-        vscode.workspace.onDidSaveTextDocument((doc) => analyze(doc))
-    );
-
-    context.subscriptions.push(
-        vscode.window.onDidChangeActiveTextEditor((editor) => {
-            if (editor) applyDecorations(editor);
-        })
-    );
-
-    context.subscriptions.push(
-        vscode.commands.registerCommand('goEscape.analyze', () => {
-            const editor = vscode.window.activeTextEditor;
-            if (editor) analyze(editor.document);
-        })
-    );
-
-    if (vscode.window.activeTextEditor?.document.languageId === 'go') {
-        analyze(vscode.window.activeTextEditor.document);
+    const goDoc = vscode.workspace.textDocuments.find(d => d.languageId === 'go');
+    if (goDoc) {
+        analyze(goDoc);
     }
 }
 
 export function deactivate() {
-    escapeDecoration?.dispose();
-    inlineDecoration?.dispose();
-    devirtDecoration?.dispose();
+    for (const k of kinds) {
+        k.decoration?.dispose();
+    }
 }
