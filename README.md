@@ -6,7 +6,9 @@ Highlights lines reported by `go build -gcflags=-m`:
 - **Blue** — inlining call
 - **Green** — devirtualized interface call
 
-![Highlight with hover](img/highlight-hover.png)
+<p align="center">
+    <img src="img/highlight-hover.png" width=75%>
+</p>
 
 Analysis runs automatically on save. Use **Go: Analyze Heap Escapes** from the Command Palette to run manually.
 
