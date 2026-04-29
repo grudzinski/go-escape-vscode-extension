@@ -3,7 +3,7 @@
   "publisher": "RomanGrudzinski",
   "displayName": "Go Heap Escape Highlighter",
   "description": "Highlights heap escapes, inlining calls, and devirtualizations from go build -gcflags=-m",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "license": "MIT",
   "engines": {
     "vscode": "^1.80.0"

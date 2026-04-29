@@ -7,7 +7,7 @@ Highlights lines reported by `go build -gcflags=-m`:
 - **Green** — devirtualized interface call
 
 <p align="center">
-    <img src="img/highlight-hover.png" width=75%>
+    <img src="img/highlight-hover.png" width="75%">
 </p>
 
 Analysis runs automatically on save. Use **Go: Analyze Heap Escapes** from the Command Palette to run manually.
